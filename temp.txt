@@ -1,0 +1,85 @@
+from scipy.optimize import minimize
+from scipy.optimize import OptimizeResult
+from scipy.optimize import OptimizeWarning
+
+import numpy as np
+import pandas as pd
+
+import warnings
+
+%matplotlib inline
+import matplotlib.pyplot as plt
+from matplotlib import style
+style.use('fivethirtyeight')
+
+warnings.simplefilter('ignore')
+
+def peek_in(solution:OptimizeResult):
+    print(solution.get('x'), solution.get('success'), solution.get('fun'))
+
+def plot(df: pd.DataFrame):
+  fig, axs = plt.subplots(1, 2, figsize=(25, 6))
+  #axs[0].bar(df.x, df.yp)
+  axs[0].plot(df.yp)
+  axs[0].title.set_text('Allocations % Deal At Rank')
+  axs[1].plot(df.yc);
+  axs[1].title.set_text('Cumulative Allocation')
+  plt.show()
+  
+def quick_diag(solutions: list):
+  print('\n\n----- SOLUTION QUICK DIAGNOSTICS -----')
+  for sol in solutions:
+    peek_in(sol)
+
+def fit(expected:dict) -> pd.DataFrame:  
+  def objective(params):
+    # Fits the Power Law of the form ypi = a * (1-b)**xi for a curve segment defined by ranks in range {start <= i <= end}
+    #    where a,b are the parameters 0,1 to optimize
+    #    s.t. the RMSE for cumulative allocation at i = mid and i = end are minimized comparing against expected values
+    # Example: segment 1 can have start = 1, end = 25, mid = 10. 
+    #    The objective will be minimized when cumulative allocation at rank 10 & 25 are nearest to their expected values 
+    yp[start:end] = params[0] * (1-params[1])**(x[start:end])
+    error = np.sqrt((kc_1 - yp[0:mid].sum())**2 + (kc_2 - yp[0:end].sum())**2 )
+    return error
+
+  # Setup
+  num_alloc = expected['knots'][-1]
+  total_inst = expected['knots_c'][-1]
+  x = np.linspace(1, num_alloc, num_alloc)  
+  yp = np.zeros(num_alloc)
+
+  # Fit all segments as per expected knot rank/value pairs
+  solutions = []
+  prior_solution = None
+  for i in range(len(expected['knots'])-2):
+    # Fit each segments using 3 knot ranks each. 
+    # eg. assume first 10 allocations use knot ranks (start,mid,end) = (1,10,25). 
+    #     next band of 15 allocations i.e 11-25 allocations use knot ranks (start,mid,end) = (10,25,50)
+    #     note in each case the error is minimized for cumulative values at mid and end ranks
+    start = expected['knots'][i]
+    mid  = expected['knots'][i+1]
+    kc_1 = expected['knots_c'][i+1]
+    end =  expected['knots'][i+2]    
+    kc_2 = expected['knots_c'][i+2]
+    # Initial values setup depends on prior solution where available
+    if i == 0:
+      solution = minimize(fun=objective, x0=[kc_1/5,0.99], method='SLSQP')
+    else:
+      solution = minimize(fun=objective, x0=[yp[int(mid/3)],prior_solution.get('x')[1]], method='SLSQP')    
+    solutions.append(solution)
+    prior_solution = solution    
+
+  #last_sol_params = solution3.get('x')
+  #yp[start:num_alloc] = last_sol_params[0] * (1-last_sol_params[1])**(x[start:end])
+  yp = -np.sort(-yp)
+  yc = yp.cumsum()
+  df = pd.DataFrame({'x': x, 'yp': yp, 'yc': yc})
+  return df, solutions
+  
+expected = {'knots':[0,10,25,50,650], 'knots_c':[0,35,55,70,90]}
+df, solutions = fit(expected)
+#df.head(50)
+plot(df)
+quick_diag(solutions)
+print('\n\n----- TOP 5 ALLOCATIONS -----')
+df.head()
